@@ -83,6 +83,69 @@ Teachers can only manage materials they uploaded unless an admin grants the
 `canManageAllMaterials` flag on their profile. Newly registered teachers stay
 pending until an admin approves them, and a pending teacher cannot upload.
 
+## Deployment
+
+The API and the built client are served from a **single origin** by one Node
+process, so there is no second web server to configure and no CORS to get wrong in
+production.
+
+### Docker (recommended)
+
+```bash
+export JWT_SECRET="$(openssl rand -base64 48)"   # required; compose refuses to start without it
+docker compose up -d --build
+```
+
+This brings up MongoDB plus the app, waits for the database to be healthy, and
+exposes the site on http://localhost:5000. Seed demo content if you want it:
+
+```bash
+docker compose exec app node server/dist/seed.js
+```
+
+The image is a two-stage build: the first compiles the client and server, the
+second carries only production dependencies and the compiled output, running as
+the unprivileged `node` user. It runs `node` as PID 1 in exec form so the
+graceful shutdown handler receives `SIGTERM` directly.
+
+### Without Docker
+
+```bash
+npm ci
+npm run build
+NODE_ENV=production JWT_SECRET=... npm start
+```
+
+This requires Node 20+ and a reachable MongoDB.
+
+### Required production configuration
+
+| Variable | Notes |
+| --- | --- |
+| `JWT_SECRET` | **Mandatory.** Must be at least 32 characters. The server refuses to boot in production if it is still either the schema default or the placeholder from `.env.example` |
+| `MONGODB_URI` | Point at your managed or self-hosted MongoDB |
+| `CLIENT_URL` | The public origin, used for the CORS allow-list |
+| `TRUST_PROXY` | `0` when nothing proxies the app, `1` behind a single nginx/ALB hop. **Get this right** — rate limiting and HTTPS detection both key off the client IP, so a wrong value either rate-limits every visitor as one client or lets a caller spoof `X-Forwarded-For` to evade the limiter |
+| `STORAGE_PROVIDER` | `s3` for object storage, `local` otherwise. With `local`, mount `server/uploads` on a persistent volume or uploaded material is lost on every redeploy |
+
+### Operational behaviour
+
+- **Graceful shutdown.** `SIGTERM` stops new connections, drains in-flight
+  requests, closes MongoDB and exits. A forced-exit timer guarantees the process
+  cannot hang if a request refuses to finish.
+- **Health probe.** `GET /api/health` returns `200 {"status":"ok"}`. The Dockerfile
+  polls it, so an unhealthy container is restarted rather than left serving errors.
+- **Caching.** Hashed assets are served `immutable, max-age=1y`; `index.html` is
+  `no-cache`, so a deploy is picked up on the next load without stale bundles.
+- **Rate limiting.** 500 requests per 15 minutes per client IP on `/api`.
+- **Static assets** are served by the API process itself, so there is nothing to
+  mount separately.
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs typecheck, build, the end-to-end suite (against a
+throwaway MongoDB) and a `docker build` on every push and pull request to `main`.
+
 ## Tests
 
 `npm test` boots the real Express app on an ephemeral port and drives it over HTTP,

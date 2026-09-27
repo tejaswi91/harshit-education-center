@@ -19,5 +19,8 @@ export const repoRoot = path.resolve(serverRoot, '..');
 /** Directory for locally stored material and thumbnail files. */
 export const uploadDirectory = path.join(serverRoot, 'uploads');
 
+/** Root of the built client bundle, served as static assets in production. */
+export const clientDistDirectory = path.join(repoRoot, 'client', 'dist');
+
 /** Entry point of the built client, served as an SPA fallback. */
-export const clientIndexFile = path.join(repoRoot, 'client', 'dist', 'index.html');
+export const clientIndexFile = path.join(clientDistDirectory, 'index.html');

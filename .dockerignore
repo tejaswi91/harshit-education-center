@@ -1,0 +1,17 @@
+# Keep the build context small and prevent host state leaking into the image.
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.git
+.github
+.gitignore
+**/.env
+**/.env.*
+!**/.env.example
+server/uploads/*
+!server/uploads/.gitkeep
+*.log
+.DS_Store
+README.md
+*.png

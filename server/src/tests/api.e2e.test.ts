@@ -40,7 +40,7 @@ const { StudentProfile } = await import('../models/StudentProfile.js');
 const { TeacherProfile } = await import('../models/TeacherProfile.js');
 const { Settings } = await import('../models/Settings.js');
 const { uploadDirectory } = await import('../middleware/upload.js');
-const { clientIndexFile } = await import('../config/paths.js');
+const { clientIndexFile, clientDistDirectory } = await import('../config/paths.js');
 
 const STUDENT_PASSWORD = 'Student@12345';
 const TEACHER_PASSWORD = 'Teacher@12345';
@@ -944,5 +944,36 @@ describe('error handling and SPA fallback', () => {
     const res = await call('GET', '/some/deep/client/route', { raw: true });
     assert.equal(res.status, 200);
     assert.match(String(res.body), /<div id="root">/);
+  });
+
+  it('serves real built assets instead of the HTML shell', async (t) => {
+    const built = await fs.stat(clientIndexFile).then(() => true).catch(() => false);
+    if (!built) {
+      t.skip('client/dist is not built yet (run npm run build --workspace client)');
+      return;
+    }
+    // Regression guard: with no static handler the SPA fallback answers asset
+    // requests with index.html, and the browser gets HTML where it expects
+    // JavaScript, leaving the production app blank.
+    const assets = await fs.readdir(path.join(clientDistDirectory, 'assets'));
+    const bundle = assets.find((entry) => entry.endsWith('.js'));
+    assert.ok(bundle, 'the build produced a JavaScript bundle');
+
+    const res = await call('GET', `/assets/${bundle}`, { raw: true });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type') ?? '', /javascript/, 'the bundle is served as JavaScript');
+    assert.doesNotMatch(String(res.body), /<div id="root">/, 'the HTML shell is not returned for an asset');
+    assert.match(res.headers.get('cache-control') ?? '', /immutable/, 'hashed assets are cached indefinitely');
+  });
+
+  it('marks the HTML entry point as revalidatable', async (t) => {
+    const built = await fs.stat(clientIndexFile).then(() => true).catch(() => false);
+    if (!built) {
+      t.skip('client/dist/index.html is not built yet (run npm run build --workspace client)');
+      return;
+    }
+    const res = await call('GET', '/', { raw: true });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('cache-control') ?? '', /no-cache/, 'a deploy is picked up immediately');
   });
 });

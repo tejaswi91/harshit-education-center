@@ -1,0 +1,53 @@
+# Production-shaped stack: the app plus the MongoDB it needs. Mirrors what a
+# single-host deployment looks like, and doubles as a way to exercise the
+# production image locally before pushing it.
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      # The app refuses to start without Mongo, so hold it back until the
+      # database is actually accepting connections.
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  app:
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      MONGODB_URI: mongodb://mongo:27017/harshit_education
+      # Replace before any real deployment; the app refuses to boot in
+      # production while this is still the placeholder shipped in .env.example.
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in your shell or a .env file}
+      # The browser talks to the same origin that serves the bundle, so this
+      # only needs to list extra origins allowed to call the API.
+      CLIENT_URL: ${CLIENT_URL:-http://localhost:5000}
+      # Nothing proxies the app inside this compose file.
+      TRUST_PROXY: "0"
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-local}
+      STORAGE_BUCKET: ${STORAGE_BUCKET:-}
+      STORAGE_REGION: ${STORAGE_REGION:-}
+      STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY:-}
+      STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:-}
+      STORAGE_ENDPOINT: ${STORAGE_ENDPOINT:-}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    volumes:
+      # Required with STORAGE_PROVIDER=local, otherwise uploaded material is
+      # lost whenever the container is replaced.
+      - uploads:/app/server/uploads
+
+volumes:
+  mongo-data:
+  uploads:
