@@ -118,6 +118,102 @@ NODE_ENV=production JWT_SECRET=... npm start
 
 This requires Node 20+ and a reachable MongoDB.
 
+### Railway (free tier)
+
+Railway runs the `Dockerfile` as a long-lived container, which is the closest
+match to how the app is built to run: one Node process serving both the API and
+the client, with a writable disk for uploads and no request-size cap.
+
+The free tier costs $0 and includes 0.5 GB of RAM, a 0.5 GB volume and a
+subdomain. It is the only free host checked that provides persistent storage,
+which is what keeps `STORAGE_PROVIDER=local` viable.
+
+1. Push the repository to GitHub.
+2. In Railway, choose **New Project → Deploy from GitHub repo**. The `Dockerfile`
+   at the root is detected automatically; `railway.json` pins the health check
+   and restart policy.
+3. Attach a **volume** mounted at `/app/server/uploads`. Without it, uploaded
+   material is lost on every redeploy.
+4. Set the variables below.
+5. Seed the database from a machine that has the credentials:
+
+```bash
+MONGODB_URI="<atlas-uri>" JWT_SECRET=... STORAGE_PROVIDER=local npm run seed
+```
+
+Environment variables:
+
+| Variable | Value |
+| --- | --- |
+| `MONGODB_URI` | **MongoDB Atlas** connection string. Railway has no database of its own; the free M0 tier (512 MB) is enough to start |
+| `JWT_SECRET` | At least 32 characters. Production refuses to boot on the placeholder |
+| `NODE_ENV` | `production` |
+| `CLIENT_URL` | The Railway domain, e.g. `https://hec.up.railway.app` |
+| `TRUST_PROXY` | `1`. Railway proxies the app, and rate limiting keys off the client IP |
+| `STORAGE_PROVIDER` | `local`, backed by the volume |
+| `UPLOAD_MAX_MB` | `15` is fine. Unlike Vercel there is no platform request-size cap |
+
+Two limits worth planning around: the volume holds 0.5 GB, which a few hundred
+PDFs will fill, and the free tier has a single instance with no autoscaling. When
+the volume fills, switch to Cloudflare R2 (10 GB free, S3-compatible) by setting
+`STORAGE_PROVIDER=s3` with `STORAGE_ENDPOINT=https://<account>.r2.cloudflarestorage.com`;
+no code change is needed.
+
+### Vercel
+
+Vercel runs the app as a serverless function plus a static client, wired up by
+`vercel.json` and the `api/index.ts` entry point.
+
+> **Vercel's Hobby plan is restricted to non-commercial, personal use.** Running a
+> paid tuition site on it breaches the fair-use guidelines and risks the account
+> being suspended. Use the Pro plan, or prefer the Railway setup above.
+
+```bash
+npm i -g vercel
+vercel link
+vercel env add JWT_SECRET production      # generate with: openssl rand -base64 48
+vercel env add MONGODB_URI production     # your Atlas connection string
+vercel --prod
+```
+
+The client is uploaded from `client/dist` and served by the CDN; `/api/*` is
+rewritten to the function, which re-exports `server/src/vercel.ts`. Because the
+two halves are served from the same origin, `CLIENT_URL` still needs to list the
+production domain for CORS, and `VITE_API_URL` can stay at its `/api` default.
+
+Required environment variables:
+
+| Variable | Value |
+| --- | --- |
+| `MONGODB_URI` | **MongoDB Atlas** connection string. Vercel has no database of its own and no way to run one, so a hosted cluster is required |
+| `JWT_SECRET` | At least 32 characters. Production refuses to boot on the placeholder |
+| `CLIENT_URL` | The production domain, e.g. `https://your-app.vercel.app` |
+| `TRUST_PROXY` | `1`. Vercel is the single hop in front of the app, and rate limiting keys off the client IP |
+| `STORAGE_PROVIDER` | `s3` — see the note below |
+| `STORAGE_BUCKET` / `STORAGE_REGION` / `STORAGE_ACCESS_KEY` / `STORAGE_SECRET_KEY` | Your S3-compatible bucket credentials |
+| `UPLOAD_MAX_MB` | `4`. Vercel rejects request bodies over 4.5 MB before the app is reached |
+| `MONGODB_MAX_POOL_SIZE` | `5` is fine; keep it low because every function instance holds its own pool |
+
+Two platform constraints shape that configuration and are worth understanding
+before deploying:
+
+- **The filesystem is read-only and ephemeral.** Uploaded files cannot live on
+  the function's disk, so `STORAGE_PROVIDER` must be `s3`. The upload middleware
+  falls back to the system temp directory for request scratch space, and the
+  storage adapter moves the file into the bucket from there.
+- **The 4.5 MB request cap.** Vercel returns `413 FUNCTION_PAYLOAD_TOO_LARGE`
+  for larger bodies before the app runs at all. `UPLOAD_MAX_MB` is therefore set
+  below that so users get a clear message from the app instead of an opaque
+  platform error. Serving larger material needs a direct-to-S3 upload path
+  (presigned URL), which this codebase does not implement.
+
+`npm run seed` cannot run on Vercel for the same reason, so seed the Atlas
+database from a machine that has the credentials:
+
+```bash
+MONGODB_URI="<atlas-uri>" JWT_SECRET=... STORAGE_PROVIDER=s3 ... npm run seed
+```
+
 ### Required production configuration
 
 | Variable | Notes |

@@ -14,6 +14,7 @@ import { GalleryItem } from './models/GalleryItem.js';
 import { Enquiry } from './models/Enquiry.js';
 import { Settings } from './models/Settings.js';
 import { uploadDirectory } from './middleware/upload.js';
+import { storage } from './services/storage.js';
 import { CLASS_LEVELS, DEFAULT_BOARDS, DEFAULT_SUBJECTS } from './services/access.js';
 
 /**
@@ -58,16 +59,35 @@ function buildSamplePdf(title: string, lines: string[]) {
 async function writeSeedMaterial(title: string, body: string[]) {
   const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 40);
   const filename = `${Date.now()}-${Math.round(Math.random() * 1e6)}-${slug}.pdf`;
+  const contents = buildSamplePdf(title, body);
+
+  /**
+   * Written through the storage adapter rather than straight to disk, so seeded
+   * material lands in the same place the configured provider serves downloads
+   * from. Writing to local disk directly would create rows whose files are
+   * unreachable the moment the host is not a long-lived one with a persistent
+   * volume, which is exactly the case a serverless deployment runs in.
+   */
   const folder = path.join(uploadDirectory, 'materials');
   await fs.mkdir(folder, { recursive: true });
-  const target = path.join(folder, filename);
-  await fs.writeFile(target, buildSamplePdf(title, body));
-  return {
-    key: `materials/${filename}`,
-    originalName: `${title}.pdf`,
-    mimeType: 'application/pdf',
-    size: (await fs.stat(target)).size
-  };
+  const scratch = path.join(folder, filename);
+  await fs.writeFile(scratch, contents);
+
+  try {
+    return await storage.put({
+      fieldname: 'file',
+      originalname: filename,
+      mimetype: 'application/pdf',
+      size: contents.byteLength,
+      destination: folder,
+      filename,
+      path: scratch,
+      buffer: contents
+    } as Express.Multer.File, 'materials');
+  } catch (error) {
+    await fs.unlink(scratch).catch(() => undefined);
+    throw error;
+  }
 }
 async function seed() {
   await connectDatabase();

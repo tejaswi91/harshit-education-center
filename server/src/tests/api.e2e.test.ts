@@ -12,9 +12,11 @@
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import type { Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import type { RequestListener, Server } from 'node:http';
+import { IncomingMessage, ServerResponse } from 'node:http';
+import type { AddressInfo, Socket } from 'node:net';
 import path from 'node:path';
+import { PassThrough, Readable } from 'node:stream';
 import { after, before, describe, it } from 'node:test';
 import mongoose from 'mongoose';
 
@@ -549,6 +551,37 @@ describe('download access matrix', () => {
     const authorised = await get(`/api/files/materials/${FIXTURE_PDF_NAME}`, ids.studentToken);
     assert.equal(authorised.status, 200);
   });
+
+  it('serves a raw file from a stream when storage is not on disk', async () => {
+    /**
+     * `S3Storage.getDownload` resolves to a stream, while the local adapter
+     * resolves to a path on disk. Only one of the two is populated, so this
+     * stubs the adapter to return a stream and asserts the endpoint still
+     * serves the bytes. Before the stream branch existed this answered 501,
+     * which meant every S3 deployment returned "not configured" for raw files
+     * even though the adapter was working correctly.
+     */
+    const { storage } = await import('../services/storage.js');
+    const original = storage.getDownload.bind(storage);
+    const payload = Buffer.from(FIXTURE_PDF_BODY);
+    storage.getDownload = async () => ({
+      stream: Readable.from([payload]),
+      contentType: 'application/pdf',
+      size: payload.byteLength
+    });
+
+    try {
+      const res = await call('GET', `/api/files/materials/${FIXTURE_PDF_NAME}`, {
+        token: ids.studentToken,
+        raw: true
+      });
+      assert.equal(res.status, 200);
+      assert.match(res.headers.get('content-type') ?? '', /application\/pdf/);
+      assert.equal(res.body, FIXTURE_PDF_BODY);
+    } finally {
+      storage.getDownload = original;
+    }
+  });
 });
 
 describe('student favourites and dashboard', () => {
@@ -975,5 +1008,102 @@ describe('error handling and SPA fallback', () => {
     const res = await call('GET', '/', { raw: true });
     assert.equal(res.status, 200);
     assert.match(res.headers.get('cache-control') ?? '', /no-cache/, 'a deploy is picked up immediately');
+  });
+});
+
+/**
+ * The serverless entry point Vercel invokes instead of `server.ts`.
+ *
+ * These run against the same booted app but through the handler rather than a
+ * listener, because the two differ in exactly the ways that are easy to get
+ * wrong: the handler is handed the raw Node request/response pair, and it is
+ * the only thing standing between an unreachable database and a hung request.
+ */
+describe('serverless handler', () => {
+  /**
+   * Feeds one request through the handler and returns the response.
+   *
+   * A real `IncomingMessage`/`ServerResponse` pair is built over a pair of
+   * streams, so Express sees genuine Node objects and the assertions describe
+   * what a platform would actually receive. The bytes coming out of the socket
+   * are a full HTTP response, so the status line and headers are stripped and
+   * only the body is returned to the caller.
+   */
+  function exchange(handler: RequestListener, pathname: string) {
+    return new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const downstream = new PassThrough();
+      const upstream = new PassThrough();
+      downstream.on('error', reject);
+
+      // `IncomingMessage` and `assignSocket` are typed against a real `Socket`,
+      // which a `PassThrough` stands in for here.
+      const req = new IncomingMessage(upstream as unknown as Socket);
+      req.url = pathname;
+      req.method = 'GET';
+
+      const res = new ServerResponse(req);
+      res.assignSocket(downstream as unknown as Socket);
+      res.on('error', reject);
+
+      const chunks: Buffer[] = [];
+      downstream.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+      // `finish` fires once the response has been fully written, which is the
+      // reliable signal here; the socket stream itself is never explicitly ended.
+      res.on('finish', () => {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        // Everything up to the blank line is the status line plus headers.
+        const separator = raw.indexOf('\r\n\r\n');
+        resolve({
+          status: res.statusCode,
+          body: separator === -1 ? '' : raw.slice(separator + 4)
+        });
+      });
+
+      handler(req, res);
+      // Nothing flushes a `PassThrough` automatically, so the readable side is
+      // resumed explicitly and drained once the response has been written.
+      downstream.resume();
+    });
+  }
+
+  it('serves the API without a port listener', async () => {
+    const handler = (await import('../vercel.js')).default as unknown as RequestListener;
+    const { status, body } = await exchange(handler, '/api/health');
+    assert.equal(status, 200);
+    assert.equal(JSON.parse(body).status, 'ok');
+  });
+
+  it('still returns a JSON 404 for an unknown API route', async () => {
+    const handler = (await import('../vercel.js')).default as unknown as RequestListener;
+    const { status, body } = await exchange(handler, '/api/does-not-exist');
+    assert.equal(status, 404);
+    assert.match(JSON.parse(body).error, /not found/i);
+  });
+
+  it('answers 503 rather than hanging when the database is unreachable', async () => {
+    // The cached connection has to be torn down first, otherwise the handler
+    // reuses it and never dials out, so the failure path would not be reached.
+    // A refused connection is detected in milliseconds, so the only wait is
+    // mongoose's own server-selection timeout. `config/env.ts` parses
+    // `process.env` once at import time, so the URI is swapped on the parsed
+    // object to aim the attempt at a closed port.
+    const { connectDatabase, disconnectDatabase } = await import('../config/db.js');
+    const handler = (await import('../vercel.js')).default as unknown as RequestListener;
+    const { env } = await import('../config/env.js');
+    const previousUri = env.MONGODB_URI;
+    (env as { MONGODB_URI: string }).MONGODB_URI = 'mongodb://127.0.0.1:1/unreachable';
+
+    await disconnectDatabase();
+    const started = Date.now();
+    try {
+      const { status, body } = await exchange(handler, '/api/health');
+      assert.equal(status, 503);
+      assert.match(JSON.parse(body).error, /temporarily unavailable/i);
+      assert.ok(Date.now() - started < 15_000, 'the request failed rather than hanging');
+    } finally {
+      (env as { MONGODB_URI: string }).MONGODB_URI = previousUri;
+      await disconnectDatabase();
+      await connectDatabase();
+    }
   });
 });

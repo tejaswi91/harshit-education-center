@@ -9,6 +9,13 @@ const SHUTDOWN_GRACE_MS = 10_000;
 let server: Server | undefined;
 let shuttingDown = false;
 
+/**
+ * Listener for hosts that run the app as a long-lived process.
+ *
+ * A serverless platform invokes `vercel.ts` instead, which connects to the
+ * database per request and is then frozen; this entry point is what
+ * `npm start` and the Docker image use.
+ */
 async function start() {
   await connectDatabase();
   server = app.listen(env.PORT, () => console.log(`Harshit Education Center API listening on ${env.PORT}`));

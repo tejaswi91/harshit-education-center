@@ -1,11 +1,36 @@
 import multer from 'multer';
 import fs from 'node:fs';
-import { uploadDirectory } from '../config/paths.js';
+import os from 'node:os';
+import path from 'node:path';
+import { uploadDirectory as preferredUploadDirectory } from '../config/paths.js';
+import { uploadMaxBytes } from '../config/env.js';
 import { HttpError } from '../utils/httpError.js';
 
-if (!fs.existsSync(uploadDirectory)) fs.mkdirSync(uploadDirectory, { recursive: true });
+/**
+ * Directory multer streams uploads into.
+ *
+ * The default lives inside the repository, which is writable locally and in
+ * Docker. Serverless hosts such as Vercel mount the bundle read-only and only
+ * allow writes under the temp directory, so creation is attempted first and the
+ * temp directory is used as the fallback. The fallback is only safe because a
+ * deployed serverless instance is expected to be paired with `STORAGE_PROVIDER=s3`
+ * (or another durable store); local disk here is scratch space for the request,
+ * not a place the file is meant to survive.
+ */
+function resolveUploadDirectory() {
+  try {
+    fs.mkdirSync(preferredUploadDirectory, { recursive: true });
+    fs.accessSync(preferredUploadDirectory, fs.constants.W_OK);
+    return preferredUploadDirectory;
+  } catch {
+    const fallback = path.join(os.tmpdir(), 'hec-uploads');
+    fs.mkdirSync(fallback, { recursive: true });
+    console.warn(`Upload directory is not writable, falling back to ${fallback}`);
+    return fallback;
+  }
+}
 
-export { uploadDirectory };
+export const uploadDirectory = resolveUploadDirectory();
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDirectory),
@@ -23,7 +48,7 @@ const allowedMimeTypes = new Set([
 
 export const upload = multer({
   storage,
-  limits: { fileSize: 15 * 1024 * 1024 },
+  limits: { fileSize: uploadMaxBytes },
   fileFilter: (_req, file, cb) => {
     if (!allowedMimeTypes.has(file.mimetype)) return cb(new HttpError(400, 'Unsupported file type. Upload PDF, Office documents, text, JPG, PNG, or WebP files.'));
     cb(null, true);

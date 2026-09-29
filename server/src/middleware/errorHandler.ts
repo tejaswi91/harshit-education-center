@@ -1,6 +1,7 @@
 import type { ErrorRequestHandler, RequestHandler } from 'express';
 import { ZodError } from 'zod';
 import multer from 'multer';
+import { uploadMaxBytes } from '../config/env.js';
 import { HttpError } from '../utils/httpError.js';
 import { removeTempFiles } from './upload.js';
 
@@ -20,7 +21,8 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
     return;
   }
   if (error instanceof multer.MulterError) {
-    res.status(400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'File is too large (maximum 15 MB)' : error.message });
+    const limit = `${Math.round(uploadMaxBytes / (1024 * 1024))} MB`;
+    res.status(400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? `File is too large (maximum ${limit})` : error.message });
     return;
   }
   if (error?.name === 'ValidationError') {

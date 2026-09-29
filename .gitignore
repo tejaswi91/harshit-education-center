@@ -9,3 +9,8 @@ server/uploads/*
 *.tsbuildinfo
 *.log
 .DS_Store
+# Vercel CLI link state, which points at one developer's local project.
+.vercel
+# Screenshots and exports dropped at the repo root during design work. The
+# Docker build already ignores *.png; this keeps them out of git history too.
+*.png
