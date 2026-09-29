@@ -130,8 +130,15 @@ which is what keeps `STORAGE_PROVIDER=local` viable.
 
 1. Push the repository to GitHub.
 2. In Railway, choose **New Project → Deploy from GitHub repo**. The `Dockerfile`
-   at the root is detected automatically; `railway.json` pins the health check
-   and restart policy.
+   at the root is detected automatically; `railway.json` pins the builder, the
+   health check, the restart policy and the build watch patterns.
+
+   `railway.json` **overrides** whatever the dashboard shows — Railway resolves
+   settings as environment config → config in code → dashboard settings. So
+   even if **Settings** says the builder is Railpack, the committed
+   `"builder": "DOCKERFILE"` wins. One thing to check in the dashboard is the
+   **root directory**: it must be empty (or `/`), because a `server` root would
+   build only the backend and the client would 404.
 3. Attach a **volume** mounted at `/app/server/uploads`. Without it, uploaded
    material is lost on every redeploy.
 4. Set the variables below.
@@ -153,11 +160,24 @@ Environment variables:
 | `STORAGE_PROVIDER` | `local`, backed by the volume |
 | `UPLOAD_MAX_MB` | `15` is fine. Unlike Vercel there is no platform request-size cap |
 
+> **No `RAILWAY_RUN_UID` needed.** Railway mounts volumes owned by root, which
+> normally makes uploads fail with `EACCES` for an image that runs as a
+> non-root user — Railway's own workaround is to set `RAILWAY_RUN_UID=0` and
+> run the whole app as root. This image instead uses `docker/entrypoint.sh`: it
+> starts as root, `chown`s the upload directory to `node`, then drops privileges
+> with `su-exec` before exec'ing the server. The fix is in the image, so there
+> is nothing extra to configure, and the app still never runs as root. The same
+> entrypoint makes the `docker-compose` stack work unchanged.
+
 Two limits worth planning around: the volume holds 0.5 GB, which a few hundred
 PDFs will fill, and the free tier has a single instance with no autoscaling. When
 the volume fills, switch to Cloudflare R2 (10 GB free, S3-compatible) by setting
 `STORAGE_PROVIDER=s3` with `STORAGE_ENDPOINT=https://<account>.r2.cloudflarestorage.com`;
 no code change is needed.
+
+Because a volume service is single-replica, Railway briefly takes a service
+offline while it redeploys. The `SIGTERM` handler in `server.ts` drains
+in-flight requests first, so a deploy does not cut a live download short.
 
 ### Vercel
 

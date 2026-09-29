@@ -30,11 +30,27 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/client/dist ./client/dist
 
+# `su-exec` lets the entrypoint start as root, fix the upload directory's
+# ownership, and then drop to the unprivileged `node` user before exec'ing the
+# server. It is far smaller than gosu and comes from Alpine's own repository.
+RUN apk add --no-cache su-exec
+
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
 # `config/paths.ts` resolves the upload directory relative to the server
 # package, so locally stored material lives here. It must be writable by the
 # unprivileged runtime user and is mounted as a volume in docker-compose.
 RUN mkdir -p /app/server/uploads && chown -R node:node /app/server/uploads
-USER node
+
+# The container deliberately starts as root so the entrypoint can hand the
+# upload directory to the `node` user, which is what actually runs the server.
+# Hosts that mount a volume here (Railway, docker-compose) mount it as root,
+# so without this step the unprivileged process would hit EACCES on every
+# upload. The entrypoint drops privileges again before exec'ing, so the app
+# never runs as root.
+USER root
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 EXPOSE 5000
 
@@ -45,4 +61,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 # Exec form so the runtime sends SIGTERM to node directly and the graceful
 # shutdown handler in server.ts gets a chance to drain in-flight requests.
+# The entrypoint wraps this so the upload directory can be made writable first
+# (see docker-entrypoint.sh) without giving the app itself root.
 CMD ["node", "server/dist/server.js"]
