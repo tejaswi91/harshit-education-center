@@ -54,9 +54,9 @@ export default function Login() {
           <div className="card p-6 sm:p-8">
             <h1 className="font-display text-xl font-extrabold text-navy">Sign in to your account</h1>
             <p className="mt-1.5 text-sm text-slate-500">
-              New here?{' '}
-              <Link to="/register" className="font-semibold text-royal hover:underline">
-                Create a free account
+              Need an account?{' '}
+              <Link to="/contact" className="font-semibold text-royal hover:underline">
+                Contact the institute
               </Link>
             </p>
 
@@ -108,7 +108,7 @@ export default function Login() {
           </div>
 
           <div className="card bg-navy p-6 text-white sm:p-8">
-            <h2 className="font-display text-lg font-extrabold">Why create an account?</h2>
+            <h2 className="font-display text-lg font-extrabold">Institute account access</h2>
             <ul className="mt-5 space-y-4">
               {PERKS.map(({ icon: Icon, text }) => (
                 <li key={text} className="flex gap-3">
@@ -120,8 +120,7 @@ export default function Login() {
               ))}
             </ul>
             <div className="mt-7 rounded-xl bg-white/5 p-4 text-sm text-slate-300">
-              Teachers who need to publish material should register as a{' '}
-              <span className="font-semibold text-gold">Teacher</span> and wait for admin approval.
+              Student and teacher accounts are created by an institute administrator. Contact the institute if you need access.
             </div>
           </div>
         </div>

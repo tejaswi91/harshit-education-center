@@ -6,7 +6,7 @@ import { signToken } from '../utils/jwt.js';
 import { User, hashPassword } from '../models/User.js';
 import { StudentProfile } from '../models/StudentProfile.js';
 import { TeacherProfile } from '../models/TeacherProfile.js';
-import { changePasswordSchema, loginSchema, registerSchema, updateProfileSchema } from '../validators/auth.js';
+import { changePasswordSchema, loginSchema, updateProfileSchema } from '../validators/auth.js';
 
 export const authRoutes = Router();
 
@@ -17,38 +17,9 @@ function sessionPayload(user: InstanceType<typeof User>) {
   };
 }
 
-authRoutes.post('/register', asyncHandler(async (req, res) => {
-  const data = registerSchema.parse(req.body);
-  const existing = await User.findOne({ email: data.email });
-  if (existing) throw new HttpError(409, 'An account with this email already exists');
-
-  const user = await User.create({
-    name: data.name,
-    email: data.email,
-    passwordHash: await hashPassword(data.password),
-    role: data.role
-  });
-
-  if (data.role === 'STUDENT') {
-    await StudentProfile.create({
-      user: user._id,
-      className: data.className || 'Class 1',
-      board: data.board || null,
-      schoolName: data.schoolName,
-      guardianName: data.guardianName,
-      mobile: data.mobile
-    });
-  } else {
-    await TeacherProfile.create({
-      user: user._id,
-      qualification: data.qualification,
-      bio: data.bio,
-      approved: false
-    });
-  }
-
-  res.status(201).json(sessionPayload(user));
-}));
+authRoutes.post('/register', (_req, _res, next) => {
+  next(new HttpError(403, 'Account creation is restricted to institute administrators'));
+});
 
 authRoutes.post('/login', asyncHandler(async (req, res) => {
   const data = loginSchema.parse(req.body);
@@ -57,6 +28,10 @@ authRoutes.post('/login', asyncHandler(async (req, res) => {
     throw new HttpError(401, 'Email or password is incorrect');
   }
   if (!user.isActive) throw new HttpError(403, 'This account has been disabled. Please contact the institute.');
+  if (user.role === 'TEACHER') {
+    const profile = await TeacherProfile.findOne({ user: user._id }).select('approved');
+    if (!profile?.approved) throw new HttpError(403, 'Teacher account is awaiting administrator approval');
+  }
   user.lastLogin = new Date();
   await user.save();
   res.json(sessionPayload(user));

@@ -80,8 +80,8 @@ export function Header() {
               <Link to="/login" className="rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/10">
                 Login
               </Link>
-              <Link to="/register" className="btn-gold py-2.5">
-                Register
+              <Link to="/contact" className="btn-gold py-2.5">
+                Contact
               </Link>
             </>
           )}
@@ -141,8 +141,8 @@ function MobileMenu({ onNavigate }: { onNavigate: () => void }) {
               <Link to="/login" onClick={onNavigate} className="btn-ghost justify-start">
                 Login
               </Link>
-              <Link to="/register" onClick={onNavigate} className="btn-gold">
-                Register
+              <Link to="/contact" onClick={onNavigate} className="btn-gold">
+                Contact
               </Link>
             </>
           )}

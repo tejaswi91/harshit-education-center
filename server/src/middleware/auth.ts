@@ -1,5 +1,6 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { User } from '../models/User.js';
+import { TeacherProfile } from '../models/TeacherProfile.js';
 import { HttpError } from '../utils/httpError.js';
 import { verifyToken, type TokenRole } from '../utils/jwt.js';
 
@@ -20,6 +21,10 @@ async function resolveUser(req: Request) {
   const user = await User.findById(payload.sub);
   if (!user) throw new HttpError(401, 'Account not found');
   if (!user.isActive) throw new HttpError(401, 'Account is disabled');
+  if (user.role === 'TEACHER') {
+    const profile = await TeacherProfile.findOne({ user: user._id }).select('approved');
+    if (!profile?.approved) throw new HttpError(403, 'Teacher account is awaiting administrator approval');
+  }
   return { id: user._id.toString(), role: user.role as TokenRole, email: user.email, name: user.name };
 }
 

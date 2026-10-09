@@ -204,8 +204,8 @@ export default function Contact() {
             <div className="card bg-navy p-6 text-white">
               <h2 className="font-display text-base font-extrabold">Looking for study material?</h2>
               <p className="mt-2 text-sm leading-relaxed text-slate-300">
-                Browse chapter-wise notes, worksheets and previous year papers. Create a free account to download
-                student-only material.
+                Browse chapter-wise notes, worksheets and previous year papers. Contact the institute to request an
+                account and download student-only material.
               </p>
               <a href="/materials" className="btn-gold mt-5 w-full">
                 Browse study material

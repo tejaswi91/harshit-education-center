@@ -40,6 +40,7 @@ const { Subject } = await import('../models/Subject.js');
 const { Board } = await import('../models/Board.js');
 const { StudentProfile } = await import('../models/StudentProfile.js');
 const { TeacherProfile } = await import('../models/TeacherProfile.js');
+const { signToken } = await import('../utils/jwt.js');
 const { Settings } = await import('../models/Settings.js');
 const { uploadDirectory } = await import('../middleware/upload.js');
 const { clientIndexFile, clientDistDirectory } = await import('../config/paths.js');
@@ -141,13 +142,19 @@ before(async () => {
 
   const admin = await User.create({ name: 'Harshit Admin', email: 'admin@e2e.test', passwordHash: await hashPassword(ADMIN_PASSWORD), role: 'ADMIN', isActive: true });
   const teacher = await User.create({ name: 'Rajesh Kumar', email: 'teacher@e2e.test', passwordHash: await hashPassword(TEACHER_PASSWORD), role: 'TEACHER', isActive: true });
+  const otherTeacher = await User.create({ name: 'Anita Rao', email: 'other-teacher@e2e.test', passwordHash: await hashPassword(TEACHER_PASSWORD), role: 'TEACHER', isActive: true });
+  const pendingTeacher = await User.create({ name: 'Pending Teacher', email: 'pending-teacher@e2e.test', passwordHash: await hashPassword(TEACHER_PASSWORD), role: 'TEACHER', isActive: true });
   const disabled = await User.create({ name: 'Blocked User', email: 'disabled@e2e.test', passwordHash: await hashPassword(ADMIN_PASSWORD), role: 'STUDENT', isActive: false });
   const teacherProfile = await TeacherProfile.create({ user: teacher._id, qualification: 'M.Sc. Mathematics', bio: 'Teaches algebra.', approved: true, canManageAllMaterials: false });
+  await TeacherProfile.create({ user: otherTeacher._id, approved: true });
+  await TeacherProfile.create({ user: pendingTeacher._id, approved: false });
 
   ids.subject = subject._id.toString();
   ids.board = board._id.toString();
   ids.admin = admin._id.toString();
   ids.teacher = teacher._id.toString();
+  ids.otherTeacher = otherTeacher._id.toString();
+  ids.pendingTeacher = pendingTeacher._id.toString();
   ids.disabled = disabled._id.toString();
   ids.teacherProfile = teacherProfile._id.toString();
 
@@ -159,23 +166,32 @@ before(async () => {
   assert.equal(teacherLogin.status, 200);
   ids.teacherToken = teacherLogin.body.token;
 
-  // The student is registered through the real endpoint so the access-control
-  // suites below share a genuine, signed-in account.
-  const studentSignup = await call('POST', '/api/auth/register', {
-    body: {
-      name: 'Aarav Sharma',
-      email: 'student@e2e.test',
-      password: STUDENT_PASSWORD,
-      role: 'STUDENT',
-      className: 'Class 10',
-      schoolName: 'Delhi Public School',
-      guardianName: 'Rakesh Sharma',
-      mobile: '9876543210'
-    }
+  const otherTeacherLogin = await call('POST', '/api/auth/login', {
+    body: { email: 'other-teacher@e2e.test', password: TEACHER_PASSWORD }
   });
-  assert.equal(studentSignup.status, 201);
-  ids.student = studentSignup.body.user.id;
-  ids.studentToken = studentSignup.body.token;
+  assert.equal(otherTeacherLogin.status, 200);
+  ids.otherTeacherToken = otherTeacherLogin.body.token;
+
+  const student = await User.create({
+    name: 'Aarav Sharma',
+    email: 'student@e2e.test',
+    passwordHash: await hashPassword(STUDENT_PASSWORD),
+    role: 'STUDENT'
+  });
+  await StudentProfile.create({
+    user: student._id,
+    className: 'Class 10',
+    board: board._id,
+    schoolName: 'Delhi Public School',
+    guardianName: 'Rakesh Sharma',
+    mobile: '9876543210'
+  });
+  ids.student = student._id.toString();
+  const studentLogin = await call('POST', '/api/auth/login', {
+    body: { email: 'student@e2e.test', password: STUDENT_PASSWORD }
+  });
+  assert.equal(studentLogin.status, 200);
+  ids.studentToken = studentLogin.body.token;
 
   // Three access tiers plus draft and private listings, used by the download matrix.
   ids.freeMaterial = (await createMaterial({ accessType: 'PUBLIC_FREE' }))._id.toString();
@@ -251,8 +267,8 @@ describe('public catalogue endpoints', () => {
 });
 
 describe('registration and login', () => {
-  it('registers a student and returns a session token', async () => {
-    const res = await post('/api/auth/register', {
+  it('blocks public student and teacher account creation', async () => {
+    const student = await post('/api/auth/register', {
       name: 'Ishita Verma',
       email: 'new-student@e2e.test',
       password: STUDENT_PASSWORD,
@@ -262,12 +278,18 @@ describe('registration and login', () => {
       guardianName: 'Neha Verma',
       mobile: '9876500011'
     });
+    assert.equal(student.status, 403);
+    assert.match(student.body.error, /restricted to institute administrators/i);
+    assert.equal(await User.findOne({ email: 'new-student@e2e.test' }), null);
 
-    assert.equal(res.status, 201);
-    assert.equal(res.body.user.role, 'STUDENT');
-    assert.equal(res.body.user.email, 'new-student@e2e.test');
-    assert.equal(res.body.user.passwordHash, undefined, 'password hash must never be returned');
-    assert.ok(res.body.token, 'a JWT is issued on registration');
+    const teacher = await post('/api/auth/register', {
+      name: 'Priya Nair',
+      email: 'newteacher@e2e.test',
+      password: TEACHER_PASSWORD,
+      role: 'TEACHER'
+    });
+    assert.equal(teacher.status, 403);
+    assert.equal(await User.findOne({ email: 'newteacher@e2e.test' }), null);
   });
 
   it('creates the matching student profile', async () => {
@@ -277,33 +299,21 @@ describe('registration and login', () => {
     assert.equal(profile!.guardianName, 'Rakesh Sharma');
   });
 
-  it('registers a teacher and creates a profile pending approval', async () => {
-    const res = await post('/api/auth/register', {
-      name: 'Priya Nair',
-      email: 'newteacher@e2e.test',
-      password: TEACHER_PASSWORD,
-      role: 'TEACHER',
-      qualification: 'B.Tech Computer Science',
-      bio: 'Teaches computer science.'
-    });
+  it('blocks an unapproved teacher from logging in and using an existing session', async () => {
+    const login = await post('/api/auth/login', { email: 'pending-teacher@e2e.test', password: TEACHER_PASSWORD });
+    assert.equal(login.status, 403);
+    assert.match(login.body.error, /awaiting administrator approval/i);
 
-    assert.equal(res.status, 201);
-    assert.equal(res.body.user.role, 'TEACHER');
-
-    const profile = await TeacherProfile.findOne({ user: res.body.user.id }).lean();
-    assert.ok(profile, 'a teacher profile is created');
-    assert.equal(profile!.approved, false);
-    ids.pendingTeacherToken = res.body.token;
+    const legacyToken = signToken({ sub: ids.pendingTeacher, role: 'TEACHER' });
+    const me = await get('/api/auth/me', legacyToken);
+    assert.equal(me.status, 403);
+    assert.match(me.body.error, /awaiting administrator approval/i);
   });
 
-  it('rejects a duplicate email with 409', async () => {
-    const res = await post('/api/auth/register', { name: 'Someone Else', email: 'student@e2e.test', password: STUDENT_PASSWORD });
-    assert.equal(res.status, 409);
-    assert.match(res.body.error, /already exists/i);
-  });
-
-  it('rejects an invalid payload with 422 and field details', async () => {
-    const res = await post('/api/auth/register', { name: 'A', email: 'not-an-email', password: 'short' });
+  it('rejects an invalid admin-created student payload with 422', async () => {
+    const adminLogin = await post('/api/auth/login', { email: 'admin@e2e.test', password: ADMIN_PASSWORD });
+    assert.equal(adminLogin.status, 200);
+    const res = await post('/api/admin/students', { name: 'A', email: 'not-an-email', password: 'short' }, adminLogin.body.token);
     assert.equal(res.status, 422);
     assert.equal(res.body.error, 'Validation failed');
     assert.ok(res.body.details, 'validation details are returned');
@@ -359,15 +369,18 @@ describe('session handling and authorisation', () => {
   it('changes a password and enforces the current one', async () => {
     // A dedicated account is used so rotating the password cannot race against
     // the other suites that still authenticate as the shared student.
-    const account = await post('/api/auth/register', {
+    const adminLogin = await post('/api/auth/login', { email: 'admin@e2e.test', password: ADMIN_PASSWORD });
+    assert.equal(adminLogin.status, 200);
+    const account = await post('/api/admin/students', {
       name: 'Password Tester',
       email: 'password-tester@e2e.test',
       password: 'FirstPass@12345',
-      role: 'STUDENT',
       className: 'Class 8'
-    });
+    }, adminLogin.body.token);
     assert.equal(account.status, 201);
-    const token = account.body.token;
+    const login = await post('/api/auth/login', { email: 'password-tester@e2e.test', password: 'FirstPass@12345' });
+    assert.equal(login.status, 200);
+    const token = login.body.token;
 
     const wrong = await post('/api/auth/change-password', { currentPassword: 'WrongPassword@1', newPassword: 'AnotherPass@99' }, token);
     assert.equal(wrong.status, 401);
@@ -390,6 +403,37 @@ describe('session handling and authorisation', () => {
     const res = await get('/api/admin/overview', ids.studentToken);
     assert.equal(res.status, 403);
     assert.match(res.body.error, /permission/i);
+  });
+
+  it('blocks anonymous student creation and leaves no account', async () => {
+    const res = await post('/api/admin/students', {
+      name: 'Unauthorized Student',
+      email: 'unauthorized-student@e2e.test',
+      password: STUDENT_PASSWORD,
+      className: 'Class 7'
+    });
+    assert.equal(res.status, 401);
+    assert.equal(await User.findOne({ email: 'unauthorized-student@e2e.test' }), null);
+  });
+
+  it('blocks anonymous teacher creation and leaves no account', async () => {
+    const res = await post('/api/admin/teachers', {
+      name: 'Unauthorized Teacher',
+      email: 'anonymous-teacher@e2e.test',
+      password: TEACHER_PASSWORD
+    });
+    assert.equal(res.status, 401);
+    assert.equal(await User.findOne({ email: 'anonymous-teacher@e2e.test' }), null);
+  });
+
+  it('blocks a student from creating teacher accounts', async () => {
+    const res = await post('/api/admin/teachers', {
+      name: 'Unauthorized Teacher',
+      email: 'unauthorized-teacher@e2e.test',
+      password: TEACHER_PASSWORD
+    }, ids.studentToken);
+    assert.equal(res.status, 403);
+    assert.equal(await User.findOne({ email: 'unauthorized-teacher@e2e.test' }), null);
   });
 
   it('blocks anonymous access to admin endpoints with 401', async () => {
@@ -680,7 +724,7 @@ describe('teacher workspace', () => {
     assert.equal(updated.body.title, 'E2E Uploaded Notes (v2)');
     assert.equal(updated.body.status, 'DRAFT');
 
-    const blocked = await patch(`/api/dashboard/materials/${created.body.id}`, { title: 'Hijacked' }, ids.pendingTeacherToken);
+    const blocked = await patch(`/api/dashboard/materials/${created.body.id}`, { title: 'Hijacked' }, ids.otherTeacherToken);
     assert.equal(blocked.status, 403, 'a different teacher cannot edit it');
     assert.match(blocked.body.error, /only manage materials you uploaded/i);
 
@@ -845,13 +889,79 @@ describe('admin workspace', () => {
     assert.ok(res.body.every((user: any) => user.role === 'TEACHER'));
   });
 
+  it('lets an admin create an approved teacher account', async () => {
+    const created = await post('/api/admin/teachers', {
+      name: 'Priya Nair',
+      email: 'created-teacher@e2e.test',
+      password: TEACHER_PASSWORD,
+      qualification: 'B.Tech Computer Science',
+      bio: 'Teaches computer science.'
+    }, ids.adminToken);
+    assert.equal(created.status, 201);
+    assert.equal(created.body.user.role, 'TEACHER');
+    assert.equal(created.body.user.passwordHash, undefined);
+    assert.equal(created.body.profile.approved, true);
+
+    const login = await post('/api/auth/login', {
+      email: 'created-teacher@e2e.test',
+      password: TEACHER_PASSWORD
+    });
+    assert.equal(login.status, 200);
+    assert.equal(login.body.user.role, 'TEACHER');
+
+    const duplicate = await post('/api/admin/teachers', {
+      name: 'Another Name',
+      email: 'created-teacher@e2e.test',
+      password: TEACHER_PASSWORD
+    }, ids.adminToken);
+    assert.equal(duplicate.status, 409);
+  });
+
+  it('lets an admin create a student account', async () => {
+    const created = await post('/api/admin/students', {
+      name: 'Ishita Verma',
+      email: 'created-student@e2e.test',
+      password: STUDENT_PASSWORD,
+      className: 'Class 9',
+      board: ids.board,
+      schoolName: 'Springdale School',
+      guardianName: 'Neha Verma',
+      mobile: '9876500011'
+    }, ids.adminToken);
+    assert.equal(created.status, 201);
+    assert.equal(created.body.user.role, 'STUDENT');
+    assert.equal(created.body.user.passwordHash, undefined);
+    assert.equal(created.body.profile.className, 'Class 9');
+
+    const login = await post('/api/auth/login', {
+      email: 'created-student@e2e.test',
+      password: STUDENT_PASSWORD
+    });
+    assert.equal(login.status, 200);
+    assert.equal(login.body.user.role, 'STUDENT');
+
+    const duplicate = await post('/api/admin/students', {
+      name: 'Another Name',
+      email: 'created-student@e2e.test',
+      password: STUDENT_PASSWORD,
+      className: 'Class 9'
+    }, ids.adminToken);
+    assert.equal(duplicate.status, 409);
+  });
+
   it('approves a pending teacher', async () => {
     const pending = await TeacherProfile.findOne({ approved: false }).lean();
-    assert.ok(pending, 'the newly registered teacher is pending');
+    assert.ok(pending, 'the fixture teacher is pending');
 
     const res = await patch(`/api/admin/teachers/${pending!._id.toString()}`, { approved: true }, ids.adminToken);
     assert.equal(res.status, 200);
     assert.equal(res.body.approved, true);
+
+    const login = await post('/api/auth/login', {
+      email: 'pending-teacher@e2e.test',
+      password: TEACHER_PASSWORD
+    });
+    assert.equal(login.status, 200, 'an admin-approved teacher can sign in');
   });
 
   it('revokes and re-grants a teacher approval', async () => {
@@ -859,10 +969,14 @@ describe('admin workspace', () => {
     const revoked = await patch(`/api/admin/teachers/${ids.teacherProfile}`, { approved: false }, ids.adminToken);
     assert.equal(revoked.status, 200);
     assert.equal(revoked.body.approved, false);
+    const blockedLogin = await post('/api/auth/login', { email: 'teacher@e2e.test', password: TEACHER_PASSWORD });
+    assert.equal(blockedLogin.status, 403, 'revoked teachers cannot sign in');
 
     const restored = await patch(`/api/admin/teachers/${ids.teacherProfile}`, { approved: true }, ids.adminToken);
     assert.equal(restored.status, 200);
     assert.equal(restored.body.approved, true);
+    const restoredLogin = await post('/api/auth/login', { email: 'teacher@e2e.test', password: TEACHER_PASSWORD });
+    assert.equal(restoredLogin.status, 200);
   });
 
   it('stops an admin from demoting themselves', async () => {

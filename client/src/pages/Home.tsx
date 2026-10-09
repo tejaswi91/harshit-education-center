@@ -261,11 +261,11 @@ export default function Home() {
         <div className="container-page flex flex-col items-center gap-6 text-center">
           <h2 className="font-display text-2xl font-extrabold sm:text-3xl">Ready to start learning?</h2>
           <p className="max-w-xl text-sm text-slate-300">
-            Create a free account to save favourites, track downloads and access student-only material.
+            Contact the institute to request an account and access student-only material.
           </p>
           <div className="flex flex-wrap justify-center gap-3">
-            <Link to="/register" className="btn-gold">
-              Create Free Account
+            <Link to="/contact" className="btn-gold">
+              Request an Account
             </Link>
             <Link to="/contact" className="btn-outline">
               Talk to Us

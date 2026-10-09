@@ -123,6 +123,25 @@ export const userUpdateSchema = z.object({
   password: z.string().min(8).max(128).optional()
 });
 
+export const teacherCreateSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  email: z.string().trim().toLowerCase().email(),
+  password: z.string().min(8).max(128),
+  qualification: z.string().trim().max(180).optional(),
+  bio: z.string().trim().max(1000).optional()
+});
+
+export const studentCreateSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  email: z.string().trim().toLowerCase().email(),
+  password: z.string().min(8).max(128),
+  className: z.string().trim().min(1).max(60),
+  board: objectId.optional(),
+  schoolName: z.string().trim().max(160).optional(),
+  guardianName: z.string().trim().max(120).optional(),
+  mobile: z.string().trim().max(20).optional()
+});
+
 export const teacherReviewSchema = z.object({
   approved: z.coerce.boolean(),
   canManageAllMaterials: z.coerce.boolean().optional()

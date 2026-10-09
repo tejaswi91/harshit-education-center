@@ -40,6 +40,22 @@ from the same origin in development with no CORS setup.
 
 The seed is destructive: it clears the collections it owns before inserting.
 
+### Recovering a Railway administrator
+
+If the demo admin account is missing or its password is unknown, recover or
+create an admin without reseeding or deleting any application data. Deploy the
+updated app, then run `node server/dist/recover-admin.js` in a trusted
+environment configured with the Railway service's `MONGODB_URI`. Provide
+`ADMIN_EMAIL` and a new `ADMIN_PASSWORD` (8-128 characters); optionally provide
+`ADMIN_NAME` to set the account name. Do not use the seed credentials for a
+production account.
+
+The command only creates the specified account or resets the password and
+reactivates that account if it is already an admin. It refuses to promote an
+existing student or teacher account. Remove the recovery variables from the
+environment after the command succeeds, and never paste production database
+credentials or passwords into chat or source control.
+
 ## Scripts
 
 | Command | Effect |
@@ -49,6 +65,7 @@ The seed is destructive: it clears the collections it owns before inserting.
 | `npm run typecheck` | Type-checks both workspaces |
 | `npm test` | Runs the end-to-end API suite |
 | `npm run seed` | Resets and repopulates the database |
+| `npm run admin:recover` | Creates or recovers one admin account without clearing data; requires `ADMIN_EMAIL` and `ADMIN_PASSWORD` |
 | `npm start` | Runs the compiled server from `server/dist` |
 
 ## Configuration
@@ -73,15 +90,25 @@ The client reads `VITE_API_URL` (default `/api`).
 | --- | --- | --- |
 | `/api/health` | public | Liveness probe |
 | `/api/public/*` | public, optional auth | Settings, classes, boards, subjects, courses, notices, gallery, testimonials, teachers, material catalogue, enquiries |
-| `/api/auth/*` | mixed | Register, login, current user, profile update, password change |
+| `/api/auth/*` | mixed | Login, current user, profile update, password change; public registration is disabled |
 | `/api/materials/*` | signed in | Favourites, purchases, download history, file download |
 | `/api/dashboard/*` | student / teacher / admin | Role-scoped summaries; teachers and admins manage materials |
-| `/api/admin/*` | admin | Users, teacher approvals, notices, settings, enquiries, purchases, overview |
+| `/api/admin/*` | admin | Users, teacher accounts and approvals, notices, settings, enquiries, purchases, overview |
 | `/api/files/:key` | signed in | Streams a stored file |
 
-Teachers can only manage materials they uploaded unless an admin grants the
-`canManageAllMaterials` flag on their profile. Newly registered teachers stay
-pending until an admin approves them, and a pending teacher cannot upload.
+Only administrators can create student and teacher accounts. In `/dashboard/admin`,
+use the **Students** tab to create student logins and the **Teachers** tab to
+create staff logins or review teacher approvals. Admin-created staff accounts
+are approved immediately. Public account registration is disabled in both the
+client and API. Existing pending teacher profiles cannot sign in until an admin
+approves them, and revoking approval blocks both new logins and existing
+sessions. Teachers can only manage materials they uploaded unless an admin
+grants the `canManageAllMaterials` flag on their profile.
+
+To open the admin panel, sign in with an administrator account and choose
+**Dashboard**; the admin dashboard is available at `/dashboard/admin`. The
+seeded admin account is for local/demo setup only. Change its password and
+remove or disable seeded demo accounts before exposing a deployment.
 
 ## Deployment
 

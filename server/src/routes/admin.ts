@@ -22,7 +22,9 @@ import {
   gallerySchema,
   noticeSchema,
   settingsSchema,
+  studentCreateSchema,
   subjectSchema,
+  teacherCreateSchema,
   teacherReviewSchema,
   testimonialSchema,
   userUpdateSchema
@@ -172,6 +174,27 @@ adminRoutes.get('/teachers', asyncHandler(async (_req, res) => {
   res.json(profiles);
 }));
 
+adminRoutes.post('/teachers', asyncHandler(async (req, res) => {
+  const data = teacherCreateSchema.parse(req.body);
+  if (await User.exists({ email: data.email })) {
+    throw new HttpError(409, 'An account with this email already exists');
+  }
+
+  const user = await User.create({
+    name: data.name,
+    email: data.email,
+    passwordHash: await hashPassword(data.password),
+    role: 'TEACHER'
+  });
+  const profile = await TeacherProfile.create({
+    user: user._id,
+    qualification: data.qualification,
+    bio: data.bio,
+    approved: true
+  });
+  res.status(201).json({ user, profile });
+}));
+
 adminRoutes.patch('/teachers/:id', asyncHandler(async (req, res) => {
   const data = teacherReviewSchema.parse(req.body);
   const profile = await TeacherProfile.findByIdAndUpdate(
@@ -185,6 +208,29 @@ adminRoutes.patch('/teachers/:id', asyncHandler(async (req, res) => {
 
 adminRoutes.get('/students', asyncHandler(async (_req, res) => {
   res.json(await StudentProfile.find().populate('user', 'name email isActive createdAt').populate('board', 'name slug').sort({ createdAt: -1 }).lean());
+}));
+
+adminRoutes.post('/students', asyncHandler(async (req, res) => {
+  const data = studentCreateSchema.parse(req.body);
+  if (await User.exists({ email: data.email })) {
+    throw new HttpError(409, 'An account with this email already exists');
+  }
+
+  const user = await User.create({
+    name: data.name,
+    email: data.email,
+    passwordHash: await hashPassword(data.password),
+    role: 'STUDENT'
+  });
+  const profile = await StudentProfile.create({
+    user: user._id,
+    className: data.className,
+    board: data.board ?? null,
+    schoolName: data.schoolName,
+    guardianName: data.guardianName,
+    mobile: data.mobile
+  });
+  res.status(201).json({ user, profile });
 }));
 
 adminRoutes.get('/overview', asyncHandler(async (_req, res) => {
@@ -207,4 +253,3 @@ adminRoutes.get('/overview', asyncHandler(async (_req, res) => {
     downloads
   });
 }));
-

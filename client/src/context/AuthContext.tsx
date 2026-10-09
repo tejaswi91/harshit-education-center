@@ -6,7 +6,6 @@ interface AuthContextValue {
   user: SessionUser | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (payload: Record<string, unknown>) => Promise<void>;
   logout: () => void;
   refresh: () => Promise<void>;
 }
@@ -44,20 +43,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(data.user);
   }, []);
 
-  const register = useCallback(async (payload: Record<string, unknown>) => {
-    const data = await api.post<{ user: SessionUser; token: string }>('/auth/register', payload);
-    setToken(data.token);
-    setUser(data.user);
-  }, []);
-
   const logout = useCallback(() => {
     setToken(null);
     setUser(null);
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, login, register, logout, refresh }),
-    [user, loading, login, register, logout, refresh]
+    () => ({ user, loading, login, logout, refresh }),
+    [user, loading, login, logout, refresh]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
